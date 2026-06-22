@@ -1,0 +1,6 @@
+<beans xmlns="https://jakarta.ee/xml/ns/jakartaee"
+       bean-discovery-mode="annotated">
+    <interceptors>
+        <class>br.com.cb.validation.interceptor.AutoValidateInterceptor</class>
+    </interceptors>
+</beans>
