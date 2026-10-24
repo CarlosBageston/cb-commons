@@ -7,7 +7,7 @@
 
     <groupId>br.com.cb</groupId>
     <artifactId>cb-commons</artifactId>
-    <version>1.0.1</version>
+    <version>1.1.0</version>
 
     <name>cb-commons</name>
     <description>Biblioteca compartilhada para aplicações Quarkus.</description>
@@ -82,7 +82,39 @@
             <version>5.2.3</version>
         </dependency>
 
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <scope>test</scope>
+        </dependency>
+
+        <dependency>
+            <groupId>com.h2database</groupId>
+            <artifactId>h2</artifactId>
+            <scope>test</scope>
+        </dependency>
+
+        <!-- Hibernate puro nos testes precisa do byte-buddy, que o Quarkus exclui -->
+        <dependency>
+            <groupId>net.bytebuddy</groupId>
+            <artifactId>byte-buddy</artifactId>
+            <scope>test</scope>
+        </dependency>
+
     </dependencies>
+
+    <build>
+
+        <plugins>
+
+            <plugin>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <version>${surefire-plugin.version}</version>
+            </plugin>
+
+        </plugins>
+
+    </build>
 
     <distributionManagement>
 
