@@ -1,7 +1,9 @@
 package br.com.cb.search;
 
 
+import br.com.cb.exceptions.ApiException;
 import jakarta.ws.rs.core.MultivaluedMap;
+import jakarta.ws.rs.core.Response;
 import jakarta.ws.rs.core.UriInfo;
 
 import java.lang.reflect.Field;
@@ -11,11 +13,20 @@ import java.util.*;
 
 public class SearchRequestParser {
 
-    public static SearchRequest from(UriInfo uriInfo, Class<?> entityClass) {
+    /**
+     * Parâmetro repetível no formato {@code campo:OPERADOR:valor}. Todas as ocorrências formam um grupo OR.
+     */
+    public static final String ANY_OF = "anyOf";
 
-        MultivaluedMap<String, String> params = uriInfo.getQueryParameters();
+    public static SearchRequest from(UriInfo uriInfo, Class<?> entityClass) {
+        return from(uriInfo.getQueryParameters(), entityClass);
+    }
+
+    public static SearchRequest from(MultivaluedMap<String, String> params, Class<?> entityClass) {
 
         List<Filter> filters = fromQueryParams(params, entityClass);
+
+        List<Filter> anyOf = fromAnyOf(params.get(ANY_OF), entityClass);
 
         int page = Optional.ofNullable(params.getFirst("page"))
                 .map(Integer::parseInt)
@@ -32,7 +43,7 @@ public class SearchRequestParser {
                 .map(SortDirection::valueOf)
                 .orElse(SortDirection.ASC);
 
-        return new SearchRequest(page, size, sortBy, direction, filters);
+        return new SearchRequest(page, size, sortBy, direction, filters, anyOf);
     }
 
     private static List<Filter> fromQueryParams(MultivaluedMap<String, String> params,
@@ -60,39 +71,82 @@ public class SearchRequestParser {
                 valuePart = raw;
             }
 
-            FilterOperator op = FilterOperator.valueOf(operatorPart.toUpperCase());
-
-            Object value = parseValue(entityClass, field, op, valuePart);
-
-            filters.add(new Filter(field, op, value));
+            filters.add(buildFilter(entityClass, field, operatorPart, valuePart));
         }
 
         return filters;
+    }
+
+    private static List<Filter> fromAnyOf(List<String> values, Class<?> entityClass) {
+
+        if (values == null || values.isEmpty()) return List.of();
+
+        List<Filter> filters = new ArrayList<>();
+
+        for (String raw : values) {
+
+            // limite 3: o valor pode conter ':'
+            String[] parts = raw.split(":", 3);
+
+            if (parts.length < 3) {
+                throw invalidFilter("Invalid anyOf filter '" + raw + "'. Expected format field:OPERATOR:value");
+            }
+
+            filters.add(buildFilter(entityClass, parts[0], parts[1], parts[2]));
+        }
+
+        return filters;
+    }
+
+    private static Filter buildFilter(Class<?> entityClass,
+                                      String fieldName,
+                                      String operatorPart,
+                                      String valuePart) {
+
+        Field field = resolveField(entityClass, fieldName);
+
+        FilterOperator op = parseOperator(fieldName, operatorPart);
+
+        // lower() só funciona em texto; em número/enum a query quebra no banco
+        if (op == FilterOperator.LIKE && field.getType() != String.class) {
+            throw invalidFilter("Operator LIKE is only supported on text fields, but '" + fieldName
+                    + "' is " + field.getType().getSimpleName());
+        }
+
+        Object value = parseValue(field, op, valuePart);
+
+        return new Filter(fieldName, op, value);
     }
 
     private static boolean isReserved(String field) {
         return field.equals("page")
                 || field.equals("size")
                 || field.equals("sortBy")
-                || field.equals("direction");
+                || field.equals("direction")
+                || field.equals(ANY_OF);
     }
 
-    private static Object parseValue(Class<?> entityClass,
-                                     String fieldName,
+    private static FilterOperator parseOperator(String fieldName, String operator) {
+        try {
+            return FilterOperator.valueOf(operator.toUpperCase());
+        } catch (IllegalArgumentException e) {
+            throw invalidFilter("Invalid operator '" + operator + "' for field '" + fieldName
+                    + "'. Allowed: " + Arrays.toString(FilterOperator.values()));
+        }
+    }
+
+    private static Object parseValue(Field field,
                                      FilterOperator op,
                                      String value) {
-
-            Field field = resolveField(entityClass, fieldName);
-            Class<?> type = field.getType();
 
             if (op == FilterOperator.IN) {
                 return Arrays.stream(value.split(","))
                         .map(String::trim)
-                        .map(v -> convert(type, v))
+                        .map(v -> convert(field, v))
                         .toList();
             }
 
-            return convert(type, value);
+            return convert(field, value);
 
     }
     private static Field resolveField(Class<?> entityClass, String name) {
@@ -101,8 +155,18 @@ public class SearchRequestParser {
             try { return c.getDeclaredField(name); }
             catch (NoSuchFieldException e) { c = c.getSuperclass(); }
         }
-        throw new IllegalArgumentException("Field not found: " + name);
+        throw invalidFilter("Field not found: " + name);
     }
+
+    private static Object convert(Field field, String value) {
+        try {
+            return convert(field.getType(), value);
+        } catch (RuntimeException e) {
+            throw invalidFilter("Invalid value '" + value + "' for field '" + field.getName()
+                    + "' (expected " + field.getType().getSimpleName() + ")");
+        }
+    }
+
     @SuppressWarnings("unchecked")
     private static Object convert(Class<?> type, String value) {
 
@@ -120,5 +184,9 @@ public class SearchRequestParser {
         if (type == UUID.class) return UUID.fromString(value);
 
         return value;
+    }
+
+    private static ApiException invalidFilter(String message) {
+        return ApiException.of(Response.Status.BAD_REQUEST, "INVALID_FILTER", message);
     }
 }
